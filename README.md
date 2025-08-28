@@ -47,7 +47,7 @@ This project was developed using **PlatformIO** with the **ESP-IDF** framework.
 ## Performance Testing & Validation
 The final optimized firmware was deployed to an ESP32 DevKitV1 for performance validation. The application successfully met and exceeded the performance target.
 
-* **Achieved Throughput:** **582.45 KB/s**
+* **Achieved Throughput:** **643.52 KB/s**
 * **Conclusion:** The dual-core architecture combined with aggressive buffering and system-level optimizations allowed the firmware to successfully achieve the high-speed download and write requirement.
 
 #### Final Log Output:
