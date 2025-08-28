@@ -15,21 +15,29 @@ The final firmware uses a dual-core, producer-consumer architecture to maximize 
 ---
 
 ## Key Optimizations Implemented
-To meet the high-throughput requirement, a series of software and system optimizations were implemented:
+To meet the high-throughput requirement, a series of optimizations were implemented both in the application code and at the system level using the ESP-IDF project configuration tool (`menuconfig`).
 
-#### 1. System & Hardware Configuration
-* **CPU Frequency:** Set to the maximum of **240 MHz** for faster processing of network data and HTTPS decryption.
-* **Wi-Fi Power Save Mode:** Disabled to ensure the Wi-Fi radio is always active for maximum throughput and minimal latency.
-* **Main Task Stack Size:** Increased to **8KB** to ensure stability during the initialization of multiple complex subsystems.
-
-#### 2. Memory & Buffer Management
+#### In-Code Optimizations
+These optimizations were implemented directly in the C code:
 * **Aggressive File I/O Buffering:** A large **32KB** file I/O buffer was used with `setvbuf`, and data was written in large **16KB** chunks to maximize the efficiency of the underlying flash memory.
 * **Large Network & Stream Buffers:** A **24KB** buffer for the HTTP client and a **36KB** stream buffer were used to handle large segments of data efficiently and reduce system call overhead.
-
-#### 3. Library & API Usage
 * **HTTP Keep-Alive:** This was enabled in the HTTP client configuration to reuse the secure TLS connection, dramatically reducing latency for sustained data transfer.
 * **Robust Wi-Fi Connection:** A FreeRTOS Event Group was used to reliably wait for a confirmed IP address before starting the download, eliminating potential race conditions.
-* **System-Managed File Buffer:** The `setvbuf` function was configured to let the system manage memory, which proved to be more stable under high load.
+
+#### System-Level Optimizations (via menuconfig)
+The following core system settings were configured for maximum performance:
+* **CPU Frequency:** Set to the maximum of **240 MHz**.
+  *(Menu path: `Component config ---> ESP System Settings ---> CPU frequency`)*
+* **Compiler Optimization:** Set to **Optimize for performance (-O2)**.
+  *(Menu path: `Component config ---> Compiler options ---> Optimization Level`)*
+* **Wi-Fi Power Save Mode:** **Disabled**.
+  *(Implemented in code via `esp_wifi_set_ps(WIFI_PS_NONE)`)*
+* **Main Task Stack Size:** Increased to **8KB** to ensure stability.
+  *(Menu path: `Component config ---> ESP System Settings ---> Main task stack size`)*
+* **TCP Window & Buffer Size:** Increased to **11520 bytes** to allow more data to be in-flight over the network, overcoming latency.
+  *(Menu path: `Component config ---> LWIP ---> TCP`)*
+* **Wi-Fi & LWIP IRAM Optimizations:** Enabled to place performance-critical parts of the network stack into faster internal RAM.
+  *(Menu path: `Component config ---> Wi-Fi / LWIP`)*
 
 ---
 
@@ -48,7 +56,7 @@ This project was developed using **PlatformIO** with the **ESP-IDF** framework.
 The final optimized firmware was deployed to an ESP32 DevKitV1 for performance validation. The application successfully met and exceeded the performance target.
 
 * **Achieved Throughput:** **643.52 KB/s**
-* **Conclusion:** The dual-core architecture combined with aggressive buffering and system-level optimizations allowed the firmware to successfully achieve the high-speed download and write requirement.
+* **Conclusion:** The dual-core architecture combined with aggressive buffering and deep system-level optimizations allowed the firmware to successfully achieve the high-speed download and write requirement.
 
 #### Final Log Output:
 <details>
