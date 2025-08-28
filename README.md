@@ -15,29 +15,27 @@ The final firmware uses a dual-core, producer-consumer architecture to maximize 
 ---
 
 ## Key Optimizations Implemented
-To meet the high-throughput requirement, a series of optimizations were implemented both in the application code and at the system level using the ESP-IDF project configuration tool (`menuconfig`).
+To achieve the high-throughput requirement, a comprehensive set of optimizations was applied at every level of the system. All system-level changes were configured using the ESP-IDF `menuconfig` utility.
 
-#### In-Code Optimizations
-These optimizations were implemented directly in the C code:
-* **Aggressive File I/O Buffering:** A large **32KB** file I/O buffer was used with `setvbuf`, and data was written in large **16KB** chunks to maximize the efficiency of the underlying flash memory.
-* **Large Network & Stream Buffers:** A **24KB** buffer for the HTTP client and a **36KB** stream buffer were used to handle large segments of data efficiently and reduce system call overhead.
-* **HTTP Keep-Alive:** This was enabled in the HTTP client configuration to reuse the secure TLS connection, dramatically reducing latency for sustained data transfer.
-* **Robust Wi-Fi Connection:** A FreeRTOS Event Group was used to reliably wait for a confirmed IP address before starting the download, eliminating potential race conditions.
-
-#### System-Level Optimizations (via menuconfig)
-The following core system settings were configured for maximum performance:
+### 1. Compiler & System
+* **Compiler Optimization Level:** Set to **Optimize for performance (-O2)**.
 * **CPU Frequency:** Set to the maximum of **240 MHz**.
-  *(Menu path: `Component config ---> ESP System Settings ---> CPU frequency`)*
-* **Compiler Optimization:** Set to **Optimize for performance (-O2)**.
-  *(Menu path: `Component config ---> Compiler options ---> Optimization Level`)*
-* **Wi-Fi Power Save Mode:** **Disabled**.
-  *(Implemented in code via `esp_wifi_set_ps(WIFI_PS_NONE)`)*
-* **Main Task Stack Size:** Increased to **8KB** to ensure stability.
-  *(Menu path: `Component config ---> ESP System Settings ---> Main task stack size`)*
-* **TCP Window & Buffer Size:** Increased to **11520 bytes** to allow more data to be in-flight over the network, overcoming latency.
-  *(Menu path: `Component config ---> LWIP ---> TCP`)*
-* **Wi-Fi & LWIP IRAM Optimizations:** Enabled to place performance-critical parts of the network stack into faster internal RAM.
-  *(Menu path: `Component config ---> Wi-Fi / LWIP`)*
+* **FreeRTOS Tick Rate:** Increased to **1000 Hz** for a more responsive task scheduler.
+
+### 2. SPI Flash Configuration
+* **Flash SPI Speed:** Increased to **80MHz**.
+* **Flash SPI Mode:** Set to **QIO (Quad I/O)** to use four data lines for faster data transfer.
+
+### 3. Networking (LWIP)
+* **IRAM Optimizations:** Enabled for critical networking functions to run in faster internal RAM.
+* **TCP Window & Buffer Size:** Increased to **11520 bytes** to maximize throughput over connections with latency.
+
+### 4. Wi-Fi Driver
+* **Wi-Fi Power Save Mode:** **Disabled** to ensure the radio is always active and eliminate wakeup latency.
+* **Wi-Fi IRAM Optimizations:** Enabled to move performance-critical driver code into faster IRAM.
+
+### 5. Filesystem (SPIFFS)
+* **Page Consistency Checks:** **Disabled** to reduce write overhead and increase raw write speed.
 
 ---
 
