@@ -13,6 +13,7 @@
 #include "esp_http_client.h"
 #include "esp_crt_bundle.h"
 #include "nvs_flash.h"
+#include "esp_heap_caps.h"
 
 #define WIFI_SSID "Sai"
 #define WIFI_PASSWORD "Saikowshik"
@@ -20,14 +21,14 @@
 
 #define TARGET_DOWNLOAD_BYTES (1024 * 1024)
 
-#define STREAM_BUFFER_SIZE (48 * 1024) //32kb pipe b/w tasks
-#define HTTP_RECV_BUFFER_SIZE (24 * 1024) //16kb buffer for http client
-#define FILE_BUFFER_SIZE (16 * 1024) //8kb buffer for file write
-#define CHUNK_WRITE_SIZE (4 * 1024) //write to file in 4kb 
+#define STREAM_BUFFER_SIZE (48 * 1024) // pipe between download and write tasks
+#define HTTP_RECV_BUFFER_SIZE (24 * 1024)
+#define FILE_BUFFER_SIZE (16 * 1024)
+#define CHUNK_WRITE_SIZE (8 * 1024)
 
 static const char *TAG = "HIGH_SPEED_DOWNLOADER";
 
-//global state
+// global state
 typedef struct{
     StreamBufferHandle_t stream_buffer;
     volatile bool producer_done;
@@ -43,7 +44,6 @@ static void wifi_event_handler(void* arg,esp_event_base_t event_base, int32_t ev
     }
     else if(event_base == IP_EVENT && event_id == IP_EVENT_STA_GOT_IP){
         ESP_LOGI(TAG,"Got IP address, Starting download test.");
-        //singal that we are connected (can use a semaphore)
     }
 }
 
@@ -63,7 +63,6 @@ void wifi_init(void)
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wifi_config));
     ESP_ERROR_CHECK(esp_wifi_start());
-    //disable wifi power save mode for max performance
     ESP_ERROR_CHECK(esp_wifi_set_ps(WIFI_PS_NONE));
 }
 
@@ -86,7 +85,7 @@ void producer_task(void *pvParameters){
     esp_http_client_config_t config = {
         .url = DOWNLOAD_URL,
         .crt_bundle_attach = esp_crt_bundle_attach,
-        .timeout_ms = 2000,
+        .timeout_ms = 20000,
         .buffer_size = HTTP_RECV_BUFFER_SIZE,
     };
 
@@ -97,6 +96,7 @@ void producer_task(void *pvParameters){
     size_t total_downloaded = 0;
     int read_len = 0;
 
+    // read from http and send to the stream buffer
     while(total_downloaded < TARGET_DOWNLOAD_BYTES){
         size_t bytes_to_read = (TARGET_DOWNLOAD_BYTES - total_downloaded < HTTP_RECV_BUFFER_SIZE) ? (TARGET_DOWNLOAD_BYTES - total_downloaded) : HTTP_RECV_BUFFER_SIZE;
         read_len = esp_http_client_read (client, recv_buffer, bytes_to_read);
@@ -105,75 +105,85 @@ void producer_task(void *pvParameters){
         }
         xStreamBufferSend(g_ctx.stream_buffer, recv_buffer, read_len, portMAX_DELAY);
         total_downloaded += read_len;
-
     }
     esp_http_client_close(client);
     esp_http_client_cleanup(client);
     free(recv_buffer);
 
     g_ctx.producer_done = true;
-    ESP_LOGI(TAG, "Producer finished, downloaded %d bytes.", total_downloaded);
+    ESP_LOGI(TAG, "Producer finished, downloaded %zu bytes.", total_downloaded);
     vTaskDelete(NULL);
 }
 
 void consumer_task(void *pvParameters){
     ESP_LOGI(TAG, "consumer task started on core %d", xPortGetCoreID());
 
-    char* chunk_buffer = malloc(CHUNK_WRITE_SIZE);
-    char* file_buffer = malloc(FILE_BUFFER_SIZE);
+    ESP_LOGI(TAG, "Consumer: Free heap before malloc: %zu bytes", esp_get_free_heap_size());
 
+    char* chunk_buffer = malloc(CHUNK_WRITE_SIZE);
+    ESP_LOGI(TAG, "Consumer: Allocated chunk_buffer (%d bytes). Free heap: %zu bytes", CHUNK_WRITE_SIZE, esp_get_free_heap_size());
+
+    // buffer for stdio functions
+    char* file_buffer = malloc(FILE_BUFFER_SIZE);
+    ESP_LOGI(TAG, "Consumer: Allocated file_buffer (%d bytes). Free heap: %zu bytes", FILE_BUFFER_SIZE, esp_get_free_heap_size());
+
+    ESP_LOGI(TAG, "Consumer: Attempting to open file...");
     FILE* f = fopen("/spiffs/download.bin", "wb");
     if(f == NULL){
-        ESP_LOGE(TAG, "FAiled to open file for writing!");
+        ESP_LOGE(TAG, "Failed to open file for writing!");
         vTaskDelete(NULL);
         return;
-    }    
+    }
 
     setvbuf(f, file_buffer, _IOFBF, FILE_BUFFER_SIZE);
 
     while(!g_ctx.producer_done || xStreamBufferBytesAvailable(g_ctx.stream_buffer) > 0){
         size_t received_bytes = xStreamBufferReceive(g_ctx.stream_buffer, chunk_buffer, CHUNK_WRITE_SIZE, pdMS_TO_TICKS(100));
-
         if(received_bytes > 0){
             fwrite(chunk_buffer, 1, received_bytes, f);
-                g_ctx.total_bytes_written += received_bytes;
+            g_ctx.total_bytes_written += received_bytes;
         }
     }
-    
+
     fclose(f);
     free(chunk_buffer);
     free(file_buffer);
 
     g_ctx.consumer_done = true;
-    ESP_LOGI(TAG, "consumer finished . wrote %d bytes.",g_ctx.total_bytes_written);
+    ESP_LOGI(TAG, "consumer finished . wrote %zu bytes.", g_ctx.total_bytes_written);
     vTaskDelete(NULL);
 }
 
 void app_main(void){
-    //initialize
     wifi_init();
     spiffs_init();
+
+    // Wait a bit for wifi to connect properly
     vTaskDelay(pdMS_TO_TICKS(5000));
 
-    g_ctx.stream_buffer = xStreamBufferCreate(STREAM_BUFFER_SIZE, 1); //pipe
+    g_ctx.stream_buffer = xStreamBufferCreate(STREAM_BUFFER_SIZE, 1);
     
     ESP_LOGI(TAG, "starting download of %d bytes to SPIFFS ", TARGET_DOWNLOAD_BYTES);
     struct timeval tv_start, tv_end;
     gettimeofday(&tv_start, NULL);
 
+    // create the two tasks for downloading and writing
     xTaskCreatePinnedToCore(producer_task, "Producer", 8192, NULL, 5, NULL, 0);
     xTaskCreatePinnedToCore(consumer_task, "Consumer", 8192, NULL, 5, NULL, 1);
 
+    // check progress until both tasks are done
     while(!g_ctx.producer_done || !g_ctx.consumer_done){
-        vTaskDelay(pdMS_TO_TICKS(250));
-        ESP_LOGI(TAG, "written %d / %d bytes", g_ctx.total_bytes_written, TARGET_DOWNLOAD_BYTES);
+        vTaskDelay(pdMS_TO_TICKS(500));
+        ESP_LOGI(TAG, "written %zu / %d bytes", g_ctx.total_bytes_written, TARGET_DOWNLOAD_BYTES);
     }
 
     gettimeofday(&tv_end, NULL);
 
+    ESP_LOGI(TAG, "written %zu / %d bytes", g_ctx.total_bytes_written, TARGET_DOWNLOAD_BYTES);
+
     float duration_s = (tv_end.tv_sec - tv_start.tv_sec) + ((tv_end.tv_usec - tv_start.tv_usec) / 1000000.0);
     float speed_kbps = 0;
-    
+
     if(duration_s > 0){
         speed_kbps = (g_ctx.total_bytes_written/1024.0)/duration_s;
     }
